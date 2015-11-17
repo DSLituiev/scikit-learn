@@ -20,7 +20,7 @@ from ..utils.validation import NotFittedError, check_is_fitted
 from ..utils.seq_dataset import ArrayDataset, CSRDataset
 
 from .base import LinearModel
-from scipy.optimize import newton, fmin_cg
+from scipy.optimize import newton, fmin_cg, minimize
 
 class PoissonRegression(LinearModel, RegressorMixin):
     """
@@ -66,14 +66,12 @@ class PoissonRegression(LinearModel, RegressorMixin):
         Fit Poisson regression model.
         Parameters
         ----------
-        X : numpy array or sparse matrix of shape [n_samples,n_features]
+        X :    numpy array or sparse matrix of shape [n_samples,n_features]
             Training data
-        y : numpy array of shape [n_samples, n_targets]
+        y :    numpy array of shape [n_samples, n_targets]
             Target values
-        sample_weight : numpy array of shape [n_samples]
-            Individual weights for each sample
-            .. versionadded:: 0.17
-               parameter *sample_weight* support to LinearRegression.
+        theta0: a vector of initial guess of
+                regression coefficients of shape [ n_features , 1]
         Returns
         -------
         self : returns an instance of self.
@@ -86,36 +84,38 @@ class PoissonRegression(LinearModel, RegressorMixin):
         # Design matrix (X) has rows as data and columns as predictors
         # lambda needs to be 
 
-        # jacobian = sum(np.dot(x[i], y[i])    for i in X.shape[0])
-
         nfeatures = X.shape[1]
-        print("nfeatures", nfeatures)
         if not hasattr(theta0, "__len__") or len(theta0) != nfeatures:
             theta0 = np.mean( theta0 ) * np.ones( (nfeatures, 1) )
 
         def loglh(X, y, theta):
+            """
+            X:        nsamples  x nfeatures
+            theta:    nfeatures x 1
+            lambda_ : nsamples x 1
+            y      :  nsamples x 1    
+            
+            """
             lambda_ = X.dot( theta )
-            return np.sum( y*lambda_ - np.exp(lambda_ ) )
+            if len(lambda_.shape) == 1:
+                lambda_ = lambda_[np.newaxis].T 
+            if len(y.shape) == 1:
+                y = y[np.newaxis].T 
+            assert lambda_.shape == y.shape, "shape mismatch, y: %s, lambda: %s" % (repr(y.shape), repr(lambda_.shape) )    
+            return  np.sum( y*lambda_ - np.exp(lambda_ ) )
 
         def dloglh(X, y, theta):
             lambda_ = X.dot( theta )
             return  X.T.dot( y -  np.exp( lambda_ ) )
-        
+
         def d2loglh(X, y , theta):
             lambda_ = X.dot( theta )
-            print("lambda:", lambda_.shape )
-            print( "X.T * lambda  " ,  (X * np.exp( lambda_ ) ).shape )
+            return  -X.T.dot( X * np.exp( lambda_ )[np.newaxis].T )
 
-            return  X.T.dot( X * np.exp( lambda_ ) )
-                    # np.sum( -(1+ X**2 )* np.exp( theta * X ) )
+        negloglh_   = lambda theta : - loglh(X,y, theta)
+        negdloglh_  = lambda theta : - dloglh(X, y, theta)
+        negd2loglh_ = lambda theta : - d2loglh(X, y, theta)
 
-        loglh_ = lambda theta : loglh(X,y, theta)
-        dloglh_ = lambda theta : dloglh(X, y, theta)
-        d2loglh_ = lambda theta : d2loglh(X, y, theta)
-
-        #theta_hat = newton( dloglh_ , theta0, fprime = d2loglh_, maxiter = maxiter)
-        
-        out = fmin_cg( loglh_, theta0, dloglh_, maxiter = maxiter)
-        theta_hat = out[0]
-        #intermediate = out[-1]
-        return theta_hat #, intermediate
+        res = minimize( negloglh_ , theta0, jac = negdloglh_, hess = negd2loglh_ , method = "Newton-CG")
+        theta_hat = res.x
+        return theta_hat 
